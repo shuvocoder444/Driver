@@ -72,3 +72,4 @@ with open('apps/accounts/views.py', 'w', encoding='utf-8') as f:
     f.write(text_norm)
 
 print("Successfully updated accounts/views.py login redirects")
+

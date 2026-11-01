@@ -37,3 +37,4 @@ for cmd in commands:
 
 ssh.close()
 print('SUCCESS! Deployed updated views and restarted lswsgi.')
+

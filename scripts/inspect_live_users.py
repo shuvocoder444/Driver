@@ -52,3 +52,4 @@ def inspect_user(email, password, role_label):
 inspect_user('admin@topd.kg', 'admin123', 'Super Admin')
 inspect_user('company@topd.kg', 'company123', 'Rental Agency')
 inspect_user('driver@topd.kg', 'driver123', 'Driver')
+
