@@ -153,11 +153,12 @@
                         </td>
                         <td class="py-3 px-4 text-right">
                             {% if u != request.user %}
-                            <a href="{% url 'accounts:user_delete' u.id %}" 
-                               onclick="return confirm('Are you sure you want to permanently delete user {{ u.email }}?')" 
-                               class="inline-flex items-center px-2.5 py-1 text-xs font-semibold text-rose-600 hover:text-white hover:bg-rose-600 border border-rose-200 hover:border-rose-600 rounded-lg transition shadow-2xs">
-                                <i class="fa-solid fa-trash-can mr-1.5 text-[10px]"></i> Delete
-                            </a>
+                            <form method="post" action="{% url 'accounts:user_delete' u.id %}" onsubmit="return confirm('Are you sure you want to permanently delete user {{ u.email }}?')">
+                                {% csrf_token %}
+                                <button type="submit" class="inline-flex items-center px-2.5 py-1 text-xs font-semibold text-rose-600 hover:text-white hover:bg-rose-600 border border-rose-200 hover:border-rose-600 rounded-lg transition shadow-2xs">
+                                    <i class="fa-solid fa-trash-can mr-1.5 text-[10px]"></i> Delete
+                                </button>
+                            </form>
                             {% else %}
                             <span class="text-[10px] text-slate-400 font-semibold italic">Current Admin</span>
                             {% endif %}
@@ -178,4 +179,3 @@
 
 </div>
 {% endblock %}
-

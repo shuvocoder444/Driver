@@ -4,37 +4,53 @@ Django settings for Topd Car Rental and Driver Verification Platform.
 
 from pathlib import Path
 import os
+from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = 'django-insecure-topd-super-secret-key-change-in-production'
+DEBUG = os.environ.get('DJANGO_DEBUG', 'true').strip().lower() in {'1', 'true', 'yes', 'on'}
 
-DEBUG = True
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
+if not SECRET_KEY:
+    if not DEBUG:
+        raise ImproperlyConfigured('DJANGO_SECRET_KEY must be configured when DJANGO_DEBUG is disabled.')
+    SECRET_KEY = 'django-insecure-local-development-key-only'
 
-ALLOWED_HOSTS = ['*']
-
-CSRF_TRUSTED_ORIGINS = [
-    'http://*.velohoster.com',
-    'https://*.velohoster.com',
-    'http://rus.velohoster.com',
-    'https://rus.velohoster.com',
-    'http://*.signsabove.net',
-    'https://*.signsabove.net',
-    'http://top.signsabove.net',
-    'https://top.signsabove.net',
-    'http://*.webkoders.com',
-    'https://*.webkoders.com',
-    'http://hospital.webkoders.com',
-    'https://hospital.webkoders.com',
-    'http://195.250.26.201',
-    'https://195.250.26.201',
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.environ.get(
+        'DJANGO_ALLOWED_HOSTS',
+        'localhost,127.0.0.1,[::1],testserver',
+    ).split(',')
+    if host.strip()
 ]
 
-CSRF_COOKIE_HTTPONLY = False
-CSRF_COOKIE_SECURE = False
-SESSION_COOKIE_SECURE = False
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get('DJANGO_CSRF_TRUSTED_ORIGINS', '').split(',')
+    if origin.strip()
+]
+
+CSRF_COOKIE_HTTPONLY = True
+CSRF_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SAMESITE = 'Lax'
 SESSION_COOKIE_SAMESITE = 'Lax'
+SECURE_SSL_REDIRECT = os.environ.get(
+    'DJANGO_SECURE_SSL_REDIRECT',
+    'false' if DEBUG else 'true',
+).strip().lower() in {'1', 'true', 'yes', 'on'}
+SECURE_HSTS_SECONDS = int(os.environ.get('DJANGO_SECURE_HSTS_SECONDS', '0'))
+SECURE_HSTS_INCLUDE_SUBDOMAINS = os.environ.get(
+    'DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS',
+    'false',
+).strip().lower() in {'1', 'true', 'yes', 'on'}
+SECURE_HSTS_PRELOAD = os.environ.get(
+    'DJANGO_SECURE_HSTS_PRELOAD',
+    'false',
+).strip().lower() in {'1', 'true', 'yes', 'on'}
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = 'same-origin'
 
 # Long-lived persistent sessions (2 weeks, renewed on every request)
 SESSION_COOKIE_AGE = 1209600
@@ -71,7 +87,6 @@ MIDDLEWARE = [
     'apps.site_settings.middleware.PersistentLanguageMiddleware',  # 100% Persistent EN/RU Middleware
     'django.middleware.locale.LocaleMiddleware',  # Multi-language support (EN, RU)
     'django.middleware.common.CommonMiddleware',
-    'apps.site_settings.middleware.CsrfCookieFallbackMiddleware',  # Fallback for HTTP/proxy cookie drops
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',

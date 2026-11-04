@@ -166,10 +166,13 @@
 
                         <!-- Logout -->
                         <div class="pt-1">
-                            <a href="{% url 'accounts:logout' %}" class="flex items-center space-x-2.5 px-4 py-2 text-xs text-rose-600 hover:bg-rose-50 font-bold transition">
-                                <i class="fa-solid fa-arrow-right-from-bracket w-4"></i>
-                                <span>{{ t.logout }}</span>
-                            </a>
+                            <form method="post" action="{% url 'accounts:logout' %}">
+                                {% csrf_token %}
+                                <button type="submit" class="flex w-full items-center space-x-2.5 px-4 py-2 text-xs text-rose-600 hover:bg-rose-50 font-bold transition">
+                                    <i class="fa-solid fa-arrow-right-from-bracket w-4"></i>
+                                    <span>{{ t.logout }}</span>
+                                </button>
+                            </form>
                         </div>
                     </div>
                 </div>
@@ -270,9 +273,12 @@
                     <a href="{% url 'dashboard:index' %}" class="px-3 py-1.5 bg-red-600 text-white font-bold text-xs rounded-lg shadow-xs">
                         {{ t.dashboard }}
                     </a>
-                    <a href="{% url 'accounts:logout' %}" class="px-2.5 py-1.5 bg-rose-100 text-rose-700 font-bold text-xs rounded-lg hover:bg-rose-200">
-                        <i class="fa-solid fa-arrow-right-from-bracket"></i>
-                    </a>
+                    <form method="post" action="{% url 'accounts:logout' %}">
+                        {% csrf_token %}
+                        <button type="submit" class="px-2.5 py-1.5 bg-rose-100 text-rose-700 font-bold text-xs rounded-lg hover:bg-rose-200">
+                            <i class="fa-solid fa-arrow-right-from-bracket"></i>
+                        </button>
+                    </form>
                 </div>
             </div>
             {% else %}

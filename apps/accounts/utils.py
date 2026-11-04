@@ -1,4 +1,38 @@
+from functools import wraps
+
+from django.contrib import messages
+from django.contrib.auth.decorators import login_required
+from django.db.models import Q
+from django.shortcuts import redirect
+
 from .models import ActivityLog, CustomUser
+
+
+def fleet_user_ids(user):
+    """Return the users whose fleet records are visible to this account."""
+    if user.is_superadmin:
+        return CustomUser.objects.values('pk')
+
+    company = user.get_company_account()
+    return CustomUser.objects.filter(Q(pk=company.pk) | Q(company=company)).values('pk')
+
+
+def fleet_access_required(view_func):
+    @login_required
+    @wraps(view_func)
+    def wrapped(request, *args, **kwargs):
+        user = request.user
+        allowed_roles = {
+            CustomUser.Role.COMPANY,
+            CustomUser.Role.ADMIN,
+            CustomUser.Role.INDIVIDUAL,
+        }
+        if not (user.is_superadmin or user.role in allowed_roles):
+            messages.error(request, 'Access denied. Fleet account privileges required.')
+            return redirect('dashboard:index')
+        return view_func(request, *args, **kwargs)
+
+    return wrapped
 
 
 def log_activity(request, action_type, module, description, company=None):
@@ -42,4 +76,3 @@ def log_activity(request, action_type, module, description, company=None):
             ip_address=ip or '127.0.0.1'
         )
     return None
-

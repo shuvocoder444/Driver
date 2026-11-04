@@ -3,10 +3,21 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
 from django.contrib.auth import authenticate, login as auth_login, logout as auth_logout
 from django.contrib.auth.decorators import login_required
-from django.views.decorators.csrf import csrf_exempt
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 from django.db.models import Q
+from django.utils.http import url_has_allowed_host_and_scheme
+from django.views.decorators.http import require_POST
 from .models import CustomUser, ActivityLog
 from .utils import log_activity
+
+
+def _password_validation_error(password, email, first_name=''):
+    try:
+        validate_password(password, user=CustomUser(email=email, first_name=first_name))
+    except ValidationError as error:
+        return ' '.join(error.messages)
+    return None
 
 
 def clear_messages(request):
@@ -25,7 +36,6 @@ def clear_messages(request):
         pass
 
 
-@csrf_exempt
 def login_view(request):
     if request.user.is_authenticated:
         if getattr(request.user, 'role', '') == CustomUser.Role.DRIVER:
@@ -38,7 +48,7 @@ def login_view(request):
 
     if request.method == 'POST':
         email = request.POST.get('email', '').strip().lower()
-        password = request.POST.get('password', '').strip()
+        password = request.POST.get('password', '')
 
         if not email or not password:
             messages.error(request, 'Please provide both email and password.')
@@ -73,7 +83,15 @@ def login_view(request):
                         company=user.get_company_account()
                     )
                     messages.success(request, f'Welcome back, {user.first_name or user.email}!')
-                    if next_url and not any(bad in next_url for bad in ['/driver/', '/superadmin/', '/dashboard/']):
+                    if (
+                        next_url
+                        and url_has_allowed_host_and_scheme(
+                            next_url,
+                            allowed_hosts={request.get_host()},
+                            require_https=request.is_secure(),
+                        )
+                        and not any(bad in next_url for bad in ['/driver/', '/superadmin/', '/dashboard/'])
+                    ):
                         return redirect(next_url)
                     return redirect('dashboard:admin')
 
@@ -88,7 +106,15 @@ def login_view(request):
                         company=user.get_company_account()
                     )
                     messages.success(request, f'Welcome back, {user.first_name or user.email}!')
-                    if next_url and next_url not in ['/dashboard/', '/dashboard/admin/', '/dashboard/company/', '/dashboard/driver/']:
+                    if (
+                        next_url
+                        and url_has_allowed_host_and_scheme(
+                            next_url,
+                            allowed_hosts={request.get_host()},
+                            require_https=request.is_secure(),
+                        )
+                        and next_url not in ['/dashboard/', '/dashboard/admin/', '/dashboard/company/', '/dashboard/driver/']
+                    ):
                         return redirect(next_url)
                     return redirect('dashboard:superadmin')
             else:
@@ -100,6 +126,7 @@ def login_view(request):
     return render(request, 'users/login.html', context)
 
 
+@require_POST
 def logout_view(request):
     if request.user.is_authenticated:
         log_activity(
@@ -117,7 +144,6 @@ def logout_view(request):
     return redirect('landing_page')
 
 
-@csrf_exempt
 def register_view(request):
     if request.user.is_authenticated:
         return redirect('dashboard:index')
@@ -127,8 +153,9 @@ def register_view(request):
         full_name = request.POST.get('full_name', '').strip()
         email = request.POST.get('email', '').strip().lower()
         phone = request.POST.get('phone', '').strip()
-        password = request.POST.get('password', '').strip()
-        confirm_password = request.POST.get('confirm_password', '').strip()
+        password = request.POST.get('password', '')
+        confirm_password = request.POST.get('confirm_password', '')
+        password_error = _password_validation_error(password, email, full_name)
 
         # Company-specific fields
         company_name = request.POST.get('company_name', '').strip()
@@ -139,6 +166,8 @@ def register_view(request):
             messages.error(request, 'Full Name, Email and Password are required.')
         elif len(password) < 8:
             messages.error(request, 'Password must be at least 8 characters long.')
+        elif password_error:
+            messages.error(request, password_error)
         elif password != confirm_password:
             messages.error(request, 'Passwords do not match.')
         elif CustomUser.objects.filter(email=email).exists():
@@ -180,20 +209,22 @@ def register_view(request):
     return render(request, 'users/register.html')
 
 
+@login_required
 def team_members_view(request):
     """Manage company team members (Owner + up to 2 staff = 3 seats maximum)."""
     user = request.user
-    if user.is_authenticated:
-        company = user.get_company_account()
-    else:
-        company = CustomUser.objects.filter(role=CustomUser.Role.COMPANY).first() or CustomUser.objects.first()
+    company = user.get_company_account()
+
+    if user.role not in [CustomUser.Role.COMPANY, CustomUser.Role.ADMIN, CustomUser.Role.INDIVIDUAL] and not user.is_superadmin:
+        messages.error(request, 'Access denied. Company account privileges required.')
+        return redirect('dashboard:index')
 
     if request.method == 'POST':
         if not company:
             messages.error(request, 'No active company found.')
             return redirect('accounts:team')
 
-        if company.role == CustomUser.Role.INDIVIDUAL:
+        if company.role != CustomUser.Role.COMPANY:
             messages.error(request, 'Personal / Individual accounts are limited to 1 user seat. Upgrade to a Company account to add team members.')
             return redirect('accounts:team')
 
@@ -204,7 +235,7 @@ def team_members_view(request):
         first_name = request.POST.get('first_name', '').strip()
         last_name = request.POST.get('last_name', '').strip()
         email = request.POST.get('email', '').strip().lower()
-        password = request.POST.get('password', '').strip()
+        password = request.POST.get('password', '')
         member_role = request.POST.get('member_role', 'Manager').strip()
         phone = request.POST.get('phone', '').strip()
 
@@ -212,6 +243,8 @@ def team_members_view(request):
             messages.error(request, 'First Name, Email, and Password are required.')
         elif len(password) < 8:
             messages.error(request, 'Password must be at least 8 characters long.')
+        elif password_error := _password_validation_error(password, email, first_name):
+            messages.error(request, password_error)
         elif CustomUser.objects.filter(email=email).exists():
             messages.error(request, 'A user with this email address already exists.')
         else:
@@ -249,6 +282,7 @@ def team_members_view(request):
     return render(request, 'users/team_members.html', context)
 
 
+@require_POST
 def team_member_delete(request, pk):
     """Remove a team member to free up a company seat (Company or Super Admin)."""
     user = request.user
@@ -256,11 +290,11 @@ def team_member_delete(request, pk):
         return redirect('accounts:login')
 
     if user.is_superuser or getattr(user, 'role', '') == CustomUser.Role.SUPERADMIN:
-        member = get_object_or_404(CustomUser, pk=pk)
-        company = member.get_company_account() or member.company_account
+        member = get_object_or_404(CustomUser, pk=pk, company__isnull=False)
+        company = member.company
     else:
         company = user.get_company_account()
-        member = get_object_or_404(CustomUser, pk=pk, company_account=company)
+        member = get_object_or_404(CustomUser, pk=pk, company=company)
 
     member_name = member.get_full_name() or member.email
     member.delete()
@@ -276,13 +310,11 @@ def team_member_delete(request, pk):
     return redirect('accounts:team')
 
 
+@login_required
 def activity_log_view(request):
     """Audit Trail / Activity Log showing who did what across all 3 company members."""
     user = request.user
-    if user.is_authenticated:
-        company = user.get_company_account()
-    else:
-        company = CustomUser.objects.filter(role=CustomUser.Role.COMPANY).first() or CustomUser.objects.first()
+    company = user.get_company_account()
 
     module_filter = request.GET.get('module', '').strip()
     actor_filter = request.GET.get('actor', '').strip()
@@ -361,6 +393,7 @@ def users_list(request):
 
 
 @login_required
+@require_POST
 def user_delete(request, pk):
     """Permanently delete a user or team member account (Super Admin only)."""
     if not (request.user.is_superuser or getattr(request.user, 'role', '') == CustomUser.Role.SUPERADMIN):

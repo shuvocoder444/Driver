@@ -1,14 +1,33 @@
 from apps.site_settings.context_processors import get_active_dashboard_role
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
+from django.utils.http import url_has_allowed_host_and_scheme
 from .models import WebsiteSetting, Currency, ContactMessage, FrontendPage
 from apps.billing.models import Plan
 from apps.accounts.models import CustomUser
 
 
+def _safe_referrer(request):
+    referrer = request.META.get('HTTP_REFERER', '/')
+    if url_has_allowed_host_and_scheme(
+        referrer,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        return referrer
+    return '/'
+
+
+def _frontend_page(slug, default_title):
+    return FrontendPage.objects.filter(slug=slug).first() or FrontendPage(
+        slug=slug,
+        title=default_title,
+    )
+
+
 def landing_page(request):
     setting = WebsiteSetting.load()
-    page = FrontendPage.objects.filter(slug='home').first()
+    page = _frontend_page('home', 'Home')
     plans = Plan.objects.filter(status=Plan.Status.ACTIVE).order_by('price')
     currencies = Currency.objects.filter(is_active=True)
     
@@ -23,19 +42,19 @@ def landing_page(request):
 
 def about_page(request):
     setting = WebsiteSetting.load()
-    page = FrontendPage.objects.filter(slug='about').first()
+    page = _frontend_page('about', 'About Us')
     return render(request, 'landing/about.html', {'setting': setting, 'page': page})
 
 
 def features_page(request):
     setting = WebsiteSetting.load()
-    page = FrontendPage.objects.filter(slug='features').first()
+    page = _frontend_page('features', 'Platform Features')
     return render(request, 'landing/features.html', {'setting': setting, 'page': page})
 
 
 def pricing_page(request):
     setting = WebsiteSetting.load()
-    page = FrontendPage.objects.filter(slug='pricing').first()
+    page = _frontend_page('pricing', 'Pricing & Plans')
     plans = Plan.objects.filter(status=Plan.Status.ACTIVE).order_by('price')
     currencies = Currency.objects.filter(is_active=True)
     return render(request, 'landing/pricing.html', {
@@ -48,7 +67,7 @@ def pricing_page(request):
 
 def contact_page(request):
     setting = WebsiteSetting.load()
-    page = FrontendPage.objects.filter(slug='contact').first()
+    page = _frontend_page('contact', 'Contact Us')
     
     if request.method == 'POST':
         name = request.POST.get('name', '').strip()
@@ -73,33 +92,35 @@ def contact_page(request):
 
 def terms_page(request):
     setting = WebsiteSetting.load()
-    page = FrontendPage.objects.filter(slug='terms').first()
+    page = _frontend_page('terms', 'Terms & Conditions')
     return render(request, 'landing/terms.html', {'setting': setting, 'page': page})
 
 
 def privacy_page(request):
     setting = WebsiteSetting.load()
-    page = FrontendPage.objects.filter(slug='privacy').first()
+    page = _frontend_page('privacy', 'Privacy Policy')
     return render(request, 'landing/privacy.html', {'setting': setting, 'page': page})
 
 
 def switch_currency(request, code):
     code = code.upper()
-    if Currency.objects.filter(code=code, is_active=True).exists():
+    currency = Currency.objects.filter(code=code, is_active=True).first()
+    if currency:
         request.session['currency'] = code
-    next_url = request.META.get('HTTP_REFERER', '/')
-    response = redirect(next_url)
-    response.set_cookie('user_currency', code, max_age=365*24*3600, path='/')
+    response = redirect(_safe_referrer(request))
+    if currency:
+        response.set_cookie('user_currency', code, max_age=365*24*3600, path='/')
     return response
 
 
 def switch_language(request, lang_code):
-    if lang_code in ['en', 'ru']:
+    valid_language = lang_code in ['en', 'ru']
+    if valid_language:
         request.session['_language'] = lang_code
         request.session['django_language'] = lang_code
-    next_url = request.META.get('HTTP_REFERER', '/')
-    response = redirect(next_url)
-    response.set_cookie('django_language', lang_code, max_age=365*24*3600, path='/')
+    response = redirect(_safe_referrer(request))
+    if valid_language:
+        response.set_cookie('django_language', lang_code, max_age=365*24*3600, path='/')
     return response
 
 

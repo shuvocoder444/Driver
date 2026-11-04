@@ -1,18 +1,21 @@
 from apps.site_settings.context_processors import get_active_dashboard_role
-from apps.accounts.utils import log_activity
+from apps.accounts.utils import fleet_access_required, fleet_user_ids, log_activity
 from apps.accounts.models import ActivityLog
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
 from django.db.models import Avg, Count, Q
 from .models import Driver, DriverHistory, DriverRating
-from apps.accounts.models import CustomUser
+from django.utils.dateparse import parse_date
 
 
+@fleet_access_required
 def driver_list(request):
     query = request.GET.get('q', '').strip()
     status_filter = request.GET.get('status', '').strip()
 
-    drivers = Driver.objects.annotate(average_rating_value=Avg('ratings__rating'))
+    drivers = Driver.objects.filter(
+        created_by__in=fleet_user_ids(request.user)
+    ).annotate(average_rating_value=Avg('ratings__rating'))
     if query:
         drivers = drivers.filter(
             Q(first_name__icontains=query) |
@@ -25,7 +28,9 @@ def driver_list(request):
     if status_filter:
         drivers = drivers.filter(status=status_filter)
 
-    driver_counts = Driver.objects.aggregate(
+    driver_counts = Driver.objects.filter(
+        created_by__in=fleet_user_ids(request.user)
+    ).aggregate(
         total=Count('pk'),
         available=Count('pk', filter=Q(status=Driver.Status.AVAILABLE)),
         busy=Count('pk', filter=Q(status=Driver.Status.BUSY)),
@@ -45,6 +50,7 @@ def driver_list(request):
     return render(request, 'drivers/list.html', context)
 
 
+@fleet_access_required
 def driver_create(request):
     if request.method == 'POST':
         first_name = request.POST.get('first_name', '').strip()
@@ -62,21 +68,24 @@ def driver_create(request):
 
         if not first_name or not last_name or not passport_number or not personal_id:
             messages.error(request, 'Please fill in all mandatory fields: First Name, Last Name, Passport, and Personal ID.')
+        elif status not in Driver.Status.values:
+            messages.error(request, 'Please select a valid driver status.')
+        elif (
+            (request.POST.get('passport_expiry') and not parse_date(request.POST['passport_expiry']))
+            or (request.POST.get('license_expiry') and not parse_date(request.POST['license_expiry']))
+        ):
+            messages.error(request, 'Please enter valid passport and license expiry dates.')
         else:
-            creator = request.user if request.user.is_authenticated else CustomUser.objects.filter(role='superadmin').first()
-            if not creator:
-                creator = CustomUser.objects.first()
-
             driver = Driver.objects.create(
-                created_by=creator,
+                created_by=request.user,
                 first_name=first_name,
                 last_name=last_name,
                 phone=phone,
                 email=email,
                 passport_number=passport_number,
-                passport_expiry=passport_expiry,
+                passport_expiry=parse_date(passport_expiry) if passport_expiry else None,
                 license_number=license_number,
-                license_expiry=license_expiry,
+                license_expiry=parse_date(license_expiry) if license_expiry else None,
                 personal_id=personal_id,
                 status=status,
                 user_comments=user_comments,
@@ -124,9 +133,12 @@ def check_driver_view(request):
     return render(request, 'drivers/check_driver.html', context)
 
 
+@fleet_access_required
 def driver_detail(request, pk):
     driver = get_object_or_404(
-        Driver.objects.annotate(average_rating_value=Avg('ratings__rating')),
+        Driver.objects.filter(
+            created_by__in=fleet_user_ids(request.user)
+        ).annotate(average_rating_value=Avg('ratings__rating')),
         pk=pk,
     )
     context = {

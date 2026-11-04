@@ -479,7 +479,10 @@
                         <div class="py-1 text-xs">
                             <a href="{% if current_dashboard == 'admin' %}{% url 'dashboard:admin' %}{% elif current_dashboard == 'driver' %}{% url 'dashboard:driver' %}{% else %}{% url 'dashboard:superadmin' %}{% endif %}" class="flex items-center px-4 py-2 text-slate-600 hover:bg-slate-50">{{ t.dashboard }}</a>
                             <a href="{% url 'billing:purchase' %}" class="flex items-center px-4 py-2 text-slate-600 hover:bg-slate-50">Buy Subscription</a>
-                            <a href="{% url 'accounts:logout' %}" class="flex items-center px-4 py-2 text-rose-600 hover:bg-rose-50 font-semibold">{{ t.logout }}</a>
+                            <form method="post" action="{% url 'accounts:logout' %}">
+                                {% csrf_token %}
+                                <button type="submit" class="flex w-full items-center px-4 py-2 text-rose-600 hover:bg-rose-50 font-semibold">{{ t.logout }}</button>
+                            </form>
                         </div>
                     </div>
                 </div>

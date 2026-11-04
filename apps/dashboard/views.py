@@ -6,6 +6,7 @@ from apps.drivers.models import Driver, DriverHistory, DriverRating
 from apps.agreements.models import Agreement
 from apps.billing.models import Subscription, ManualPayment, Plan
 from django.db.models import Avg, Count, Q, Sum
+from apps.accounts.utils import fleet_user_ids
 
 
 def dashboard_router(request):
@@ -167,11 +168,8 @@ def admin_dashboard(request):
     display_user = request.user
 
     # Filter data for this company / fleet
-    vehicles = Vehicle.objects.all()
-    if display_user and not display_user.is_superadmin:
-        my_vehicles = vehicles.filter(created_by=display_user)
-    else:
-        my_vehicles = vehicles
+    creator_ids = fleet_user_ids(display_user)
+    my_vehicles = Vehicle.objects.filter(created_by__in=creator_ids)
 
     fleet_counts = my_vehicles.aggregate(
         total=Count('pk'),
@@ -179,21 +177,15 @@ def admin_dashboard(request):
         rented=Count('pk', filter=Q(status=Vehicle.Status.RENTED)),
         maintenance=Count('pk', filter=Q(status=Vehicle.Status.MAINTENANCE)),
     )
-    if not fleet_counts['total'] and not display_user.is_superadmin:
-        my_vehicles = vehicles
-        fleet_counts = my_vehicles.aggregate(
-            total=Count('pk'),
-            available=Count('pk', filter=Q(status=Vehicle.Status.AVAILABLE)),
-            rented=Count('pk', filter=Q(status=Vehicle.Status.RENTED)),
-            maintenance=Count('pk', filter=Q(status=Vehicle.Status.MAINTENANCE)),
-        )
     total_fleet = fleet_counts['total']
     fleet_available = fleet_counts['available']
     fleet_rented = fleet_counts['rented']
     fleet_maintenance = fleet_counts['maintenance']
 
     # My Agreements
-    my_agreements = Agreement.objects.select_related('vehicle', 'driver').order_by('-created_at')
+    my_agreements = Agreement.objects.filter(
+        created_by__in=creator_ids
+    ).select_related('vehicle', 'driver').order_by('-created_at')
     agreement_counts = my_agreements.aggregate(
         total=Count('pk'),
         active=Count('pk', filter=Q(status=Agreement.Status.ACTIVE)),
@@ -203,7 +195,7 @@ def admin_dashboard(request):
     completed_rentals = agreement_counts['completed']
 
     # Drivers under company
-    my_drivers = Driver.objects.all()
+    my_drivers = Driver.objects.filter(created_by__in=creator_ids)
     driver_counts = my_drivers.aggregate(
         total=Count('pk'),
         available=Count('pk', filter=Q(status=Driver.Status.AVAILABLE)),
@@ -212,7 +204,11 @@ def admin_dashboard(request):
     drivers_available = driver_counts['available']
 
     # Subscription status
-    my_subscription = Subscription.objects.filter(user=display_user, status=Subscription.Status.ACTIVE).first() if display_user else None
+    subscription_owner = display_user.get_company_account() if display_user else None
+    my_subscription = Subscription.objects.filter(
+        user=subscription_owner,
+        status=Subscription.Status.ACTIVE,
+    ).first() if subscription_owner else None
 
     context = {
         'display_user': display_user,
@@ -252,9 +248,12 @@ def get_current_driver(request):
 
     drivers = Driver.objects.annotate(average_rating_value=Avg('ratings__rating'))
     driver = drivers.filter(user=display_user).first()
-    if not driver and display_user and display_user.email:
-        driver = drivers.filter(email=display_user.email).first()
-    if not driver:
+    if not driver and display_user.role == CustomUser.Role.DRIVER and display_user.email:
+        driver = drivers.filter(
+            user__isnull=True,
+            email__iexact=display_user.email,
+        ).first()
+    if not driver and display_user.is_superadmin:
         driver = drivers.first()
 
     return display_user, driver

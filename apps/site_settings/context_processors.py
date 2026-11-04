@@ -1,5 +1,6 @@
 from .models import WebsiteSetting, Currency
 from .translations import get_translation
+from django.db.models import Q
 
 
 def get_active_dashboard_role(request):
@@ -138,10 +139,11 @@ def site_settings_processor(request):
         elif user and user.is_authenticated:
             company = user.get_company_account() if hasattr(user, 'get_company_account') else None
             if company:
-                nav_counts['agreements'] = Agreement.objects.filter(company=company).count()
-                nav_counts['drivers'] = Driver.objects.filter(company=company).count()
-                nav_counts['vehicles'] = Vehicle.objects.filter(created_by=user).count() or Vehicle.objects.count()
-                nav_counts['team_members'] = CustomUser.objects.filter(company_account=company).count()
+                company_users = CustomUser.objects.filter(Q(pk=company.pk) | Q(company=company))
+                nav_counts['agreements'] = Agreement.objects.filter(created_by__in=company_users).count()
+                nav_counts['drivers'] = Driver.objects.filter(created_by__in=company_users).count()
+                nav_counts['vehicles'] = Vehicle.objects.filter(created_by__in=company_users).count()
+                nav_counts['team_members'] = company.team_members.filter(is_active=True).count() + 1
             else:
                 nav_counts['agreements'] = Agreement.objects.count()
                 nav_counts['drivers'] = Driver.objects.count()
@@ -149,7 +151,7 @@ def site_settings_processor(request):
                 nav_counts['team_members'] = 1
             nav_counts['pending_payments'] = 0
             nav_counts['pages'] = 0
-            nav_counts['active_subscriptions'] = 1 if Subscription.objects.filter(user=user, status=Subscription.Status.ACTIVE).exists() else 0
+            nav_counts['active_subscriptions'] = 1 if Subscription.objects.filter(user=company or user, status=Subscription.Status.ACTIVE).exists() else 0
         else:
             nav_counts['agreements'] = Agreement.objects.count()
             nav_counts['drivers'] = Driver.objects.count()

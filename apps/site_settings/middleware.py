@@ -26,30 +26,14 @@ class PersistentLanguageMiddleware:
         response = self.get_response(request)
 
         # 4. Ensure cookie is always set so language never resets on browser restart
-        if request.COOKIES.get('django_language') != lang_code:
+        response_lang_code = request.session.get('_language', lang_code)
+        if request.COOKIES.get('django_language') != response_lang_code:
             response.set_cookie(
                 'django_language',
-                lang_code,
+                response_lang_code,
                 max_age=365 * 24 * 3600,
                 path='/',
                 samesite='Lax'
             )
 
         return response
-
-
-class CsrfCookieFallbackMiddleware:
-    """
-    Guarantees that CSRF verification never fails due to missing cookies
-    on HTTP, reverse proxies, or browsers with strict cookie isolation.
-    """
-    def __init__(self, get_response):
-        self.get_response = get_response
-
-    def __call__(self, request):
-        if request.method == 'POST' and 'csrftoken' not in request.COOKIES:
-            token = request.POST.get('csrfmiddlewaretoken')
-            if token:
-                request.COOKIES['csrftoken'] = token
-        return self.get_response(request)
-

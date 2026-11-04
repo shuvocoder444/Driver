@@ -3,7 +3,9 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db.models import Count, Q
+from django.db import transaction
 from django.utils import timezone
+from django.views.decorators.http import require_POST
 from .models import ManualPayment, Subscription, Plan
 from apps.accounts.models import CustomUser
 
@@ -39,78 +41,83 @@ def manual_payments_list(request):
     return render(request, 'billing/manual_payments.html', context)
 
 
+@require_POST
 def approve_payment(request, pk):
     if not (request.user.is_authenticated and (request.user.is_superuser or getattr(request.user, 'role', '') == CustomUser.Role.SUPERADMIN)):
         messages.error(request, 'Access denied. Super Admin privileges required.')
         return redirect('dashboard:index')
-    payment = get_object_or_404(ManualPayment, pk=pk)
-    payment.status = ManualPayment.Status.APPROVED
-    payment.reviewed_at = timezone.now()
-    if request.user.is_authenticated:
+    with transaction.atomic():
+        payment = get_object_or_404(
+            ManualPayment.objects.select_for_update().select_related('user', 'plan'),
+            pk=pk,
+        )
+        if payment.status != ManualPayment.Status.PENDING:
+            messages.info(request, f'Payment #{payment.id} has already been reviewed.')
+            return redirect('billing:manual_payments')
+
+        payment.status = ManualPayment.Status.APPROVED
+        payment.reviewed_at = timezone.now()
         payment.reviewed_by = request.user
-    payment.save()
+        payment.save(update_fields=['status', 'reviewed_at', 'reviewed_by'])
 
-    # Determine duration based on interval
-    days = 30
-    if payment.plan.interval == Plan.Interval.YEARLY:
-        days = 365
-    elif payment.plan.interval == Plan.Interval.ONCE:
-        days = 365
-
-    # Check if there is an existing pending subscription for this user and plan
-    sub = Subscription.objects.filter(
-        user=payment.user,
-        plan=payment.plan,
-        status=Subscription.Status.PENDING
-    ).first()
-
-    if sub:
-        sub.status = Subscription.Status.ACTIVE
-        sub.start_date = timezone.now()
-        sub.end_date = timezone.now() + timezone.timedelta(days=days)
-        sub.save()
-    else:
-        Subscription.objects.create(
+        days = 365 if payment.plan.interval in [Plan.Interval.YEARLY, Plan.Interval.ONCE] else 30
+        subscription = Subscription.objects.select_for_update().filter(
             user=payment.user,
             plan=payment.plan,
-            start_date=timezone.now(),
-            end_date=timezone.now() + timezone.timedelta(days=days),
-            status=Subscription.Status.ACTIVE
-        )
+            status=Subscription.Status.PENDING,
+        ).first()
+
+        now = timezone.now()
+        if subscription:
+            subscription.status = Subscription.Status.ACTIVE
+            subscription.start_date = now
+            subscription.end_date = now + timezone.timedelta(days=days)
+            subscription.save(update_fields=['status', 'start_date', 'end_date', 'updated_at'])
+        else:
+            Subscription.objects.create(
+                user=payment.user,
+                plan=payment.plan,
+                start_date=now,
+                end_date=now + timezone.timedelta(days=days),
+                status=Subscription.Status.ACTIVE,
+            )
 
     messages.success(request, f'Payment #{payment.id} approved and subscription activated for {payment.user.email}!')
     return redirect('billing:manual_payments')
 
 
+@require_POST
 def reject_payment(request, pk):
     if not (request.user.is_authenticated and (request.user.is_superuser or getattr(request.user, 'role', '') == CustomUser.Role.SUPERADMIN)):
         messages.error(request, 'Access denied. Super Admin privileges required.')
         return redirect('dashboard:index')
-    payment = get_object_or_404(ManualPayment, pk=pk)
-    payment.status = ManualPayment.Status.CANCELLED
-    payment.reviewed_at = timezone.now()
-    if request.user.is_authenticated:
-        payment.reviewed_by = request.user
-    payment.save()
+    with transaction.atomic():
+        payment = get_object_or_404(
+            ManualPayment.objects.select_for_update().select_related('user', 'plan'),
+            pk=pk,
+        )
+        if payment.status != ManualPayment.Status.PENDING:
+            messages.info(request, f'Payment #{payment.id} has already been reviewed.')
+            return redirect('billing:manual_payments')
 
-    # Cancel pending subscription if any
-    Subscription.objects.filter(
-        user=payment.user,
-        plan=payment.plan,
-        status=Subscription.Status.PENDING
-    ).update(status=Subscription.Status.CANCELLED)
+        payment.status = ManualPayment.Status.CANCELLED
+        payment.reviewed_at = timezone.now()
+        payment.reviewed_by = request.user
+        payment.save(update_fields=['status', 'reviewed_at', 'reviewed_by'])
+
+        Subscription.objects.filter(
+            user=payment.user,
+            plan=payment.plan,
+            status=Subscription.Status.PENDING
+        ).update(status=Subscription.Status.CANCELLED)
 
     messages.warning(request, f'Payment #{payment.id} marked as rejected.')
     return redirect('billing:manual_payments')
 
 
+@login_required
 def purchase_subscription(request, plan_id=None):
     """Allows user to manually purchase a subscription via bank transfer / cash / mobile money."""
-    if not request.user.is_authenticated:
-        fallback_user = CustomUser.objects.filter(role=CustomUser.Role.COMPANY).first() or CustomUser.objects.filter(role=CustomUser.Role.SUPERADMIN).first() or CustomUser.objects.first()
-        if fallback_user:
-            request.user = fallback_user
-
     plans = Plan.objects.filter(status=Plan.Status.ACTIVE).order_by('price')
     
     selected_plan = None
@@ -124,35 +131,38 @@ def purchase_subscription(request, plan_id=None):
         submitted_plan_id = request.POST.get('plan_id')
         payment_method = request.POST.get('payment_method', ManualPayment.PaymentMethod.BANK_TRANSFER)
         transaction_info = request.POST.get('transaction_info', '').strip()
-        custom_amount = request.POST.get('amount', '').strip()
-        currency = request.POST.get('currency', 'USD').strip()
 
-        plan = get_object_or_404(Plan, pk=submitted_plan_id)
-        amount = custom_amount if custom_amount else plan.price
+        plan = get_object_or_404(
+            Plan,
+            pk=submitted_plan_id,
+            status=Plan.Status.ACTIVE,
+        )
 
         if not transaction_info:
             messages.error(request, 'Please provide the transaction reference / TrxID or receipt details.')
             selected_plan = plan
+        elif payment_method not in ManualPayment.PaymentMethod.values:
+            messages.error(request, 'Please select a valid payment method.')
+            selected_plan = plan
         else:
-            # 1. Create ManualPayment record
-            payment = ManualPayment.objects.create(
-                user=request.user,
-                plan=plan,
-                amount=amount,
-                currency=currency,
-                payment_method=payment_method,
-                transaction_date=timezone.now(),
-                transaction_info=transaction_info,
-                status=ManualPayment.Status.PENDING
-            )
+            with transaction.atomic():
+                payment = ManualPayment.objects.create(
+                    user=request.user,
+                    plan=plan,
+                    amount=plan.price,
+                    currency=plan.currency,
+                    payment_method=payment_method,
+                    transaction_date=timezone.now(),
+                    transaction_info=transaction_info,
+                    status=ManualPayment.Status.PENDING
+                )
 
-            # 2. Record Pending Subscription
-            Subscription.objects.create(
-                user=request.user,
-                plan=plan,
-                start_date=timezone.now(),
-                status=Subscription.Status.PENDING
-            )
+                Subscription.objects.create(
+                    user=request.user,
+                    plan=plan,
+                    start_date=timezone.now(),
+                    status=Subscription.Status.PENDING
+                )
 
             messages.success(
                 request,
@@ -346,4 +356,3 @@ def plan_delete(request, pk):
             messages.success(request, f"Package '{plan_name}' deleted successfully!")
     
     return redirect('billing:plans')
-

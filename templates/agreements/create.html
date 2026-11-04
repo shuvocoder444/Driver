@@ -45,7 +45,7 @@
     </div>
 
     <!-- FORM BODY -->
-    <form method="POST" action="{% url 'agreements:create' %}" class="bg-white rounded-2xl p-6 sm:p-8 border border-slate-200/80 shadow-xs space-y-6">
+    <form method="POST" enctype="multipart/form-data" action="{% url 'agreements:create' %}" class="bg-white rounded-2xl p-6 sm:p-8 border border-slate-200/80 shadow-xs space-y-6">
         {% csrf_token %}
 
         <!-- STEP 1 CONTENT -->
@@ -136,7 +136,8 @@
 
             <div class="border-2 border-dashed border-slate-200 rounded-2xl p-8 text-center hover:border-red-400 transition cursor-pointer">
                 <i class="fa-regular fa-image text-4xl text-slate-300 mb-3"></i>
-                <p class="text-xs font-bold text-slate-700">Click to upload before-rental photo</p>
+                <label for="before_rental_image" class="block text-xs font-bold text-slate-700">Upload before-rental photo</label>
+                <input id="before_rental_image" type="file" name="before_rental_image" accept="image/*" class="mt-3 w-full text-xs text-slate-500">
                 <p class="text-[10px] text-slate-400 mt-1">Optional image before rental. Max 10MB.</p>
             </div>
 
@@ -159,12 +160,13 @@
 
             <div class="border-2 border-dashed border-slate-200 rounded-2xl p-8 text-center hover:border-red-400 transition cursor-pointer">
                 <i class="fa-regular fa-file-pdf text-4xl text-slate-300 mb-3"></i>
-                <p class="text-xs font-bold text-slate-700">Upload PDF Agreement</p>
+                <label for="agreement_document" class="block text-xs font-bold text-slate-700">Upload PDF Agreement</label>
+                <input id="agreement_document" type="file" name="agreement_document" accept="application/pdf,.pdf" class="mt-3 w-full text-xs text-slate-500">
                 <p class="text-[10px] text-slate-400 mt-1">PDF files only. Max 10MB each.</p>
             </div>
 
             <div class="flex items-center space-x-2 pt-2">
-                <input type="checkbox" id="terms_agree" required class="rounded text-red-600 focus:ring-red-500">
+                <input type="checkbox" id="terms_agree" name="terms_agree" required class="rounded text-red-600 focus:ring-red-500">
                 <label for="terms_agree" class="text-xs text-slate-600">I agree to the Terms of Service and Privacy Policy.</label>
             </div>
 
