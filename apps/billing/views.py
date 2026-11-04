@@ -2,6 +2,7 @@ from apps.site_settings.context_processors import get_active_dashboard_role
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.db.models import Count, Q
 from django.utils import timezone
 from .models import ManualPayment, Subscription, Plan
 from apps.accounts.models import CustomUser
@@ -21,16 +22,18 @@ def manual_payments_list(request):
     if status_filter:
         payments = payments.filter(status=status_filter)
 
-    pending_count = ManualPayment.objects.filter(status=ManualPayment.Status.PENDING).count()
-    approved_count = ManualPayment.objects.filter(status=ManualPayment.Status.APPROVED).count()
-    cancelled_count = ManualPayment.objects.filter(status=ManualPayment.Status.CANCELLED).count()
+    payment_counts = ManualPayment.objects.aggregate(
+        pending=Count('pk', filter=Q(status=ManualPayment.Status.PENDING)),
+        approved=Count('pk', filter=Q(status=ManualPayment.Status.APPROVED)),
+        cancelled=Count('pk', filter=Q(status=ManualPayment.Status.CANCELLED)),
+    )
 
     context = {
         'payments': payments,
         'status_filter': status_filter,
-        'pending_count': pending_count,
-        'approved_count': approved_count,
-        'cancelled_count': cancelled_count,
+        'pending_count': payment_counts['pending'],
+        'approved_count': payment_counts['approved'],
+        'cancelled_count': payment_counts['cancelled'],
         'current_dashboard': get_active_dashboard_role(request),
     }
     return render(request, 'billing/manual_payments.html', context)
@@ -343,5 +346,4 @@ def plan_delete(request, pk):
             messages.success(request, f"Package '{plan_name}' deleted successfully!")
     
     return redirect('billing:plans')
-
 

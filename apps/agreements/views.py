@@ -3,6 +3,7 @@ from apps.accounts.utils import log_activity
 from apps.accounts.models import ActivityLog
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
+from django.db.models import Count, Q
 from .models import Agreement, AgreementMedia, AgreementDocument
 from apps.vehicles.models import Vehicle
 from apps.drivers.models import Driver
@@ -32,17 +33,17 @@ def agreement_list(request):
     if contract_type:
         agreements = agreements.filter(contract_type=contract_type)
 
-    counts = {
-        'all': Agreement.objects.count(),
-        'active': Agreement.objects.filter(status=Agreement.Status.ACTIVE).count(),
-        'completed': Agreement.objects.filter(status=Agreement.Status.COMPLETED).count(),
-        'problem': Agreement.objects.filter(status=Agreement.Status.PROBLEM).count(),
-        'cancelled': Agreement.objects.filter(status=Agreement.Status.CANCELLED).count(),
-    }
+    agreement_counts = Agreement.objects.aggregate(
+        all=Count('pk'),
+        active=Count('pk', filter=Q(status=Agreement.Status.ACTIVE)),
+        completed=Count('pk', filter=Q(status=Agreement.Status.COMPLETED)),
+        problem=Count('pk', filter=Q(status=Agreement.Status.PROBLEM)),
+        cancelled=Count('pk', filter=Q(status=Agreement.Status.CANCELLED)),
+    )
 
     context = {
         'agreements': agreements,
-        'counts': counts,
+        'counts': agreement_counts,
         'current_status': status_filter,
         'search_query': search_query,
         'current_type': contract_type,
@@ -53,8 +54,8 @@ def agreement_list(request):
 
 
 def agreement_create(request):
-    vehicles = Vehicle.objects.filter(status=Vehicle.Status.AVAILABLE)
-    drivers = Driver.objects.filter(status=Driver.Status.AVAILABLE)
+    vehicles = list(Vehicle.objects.filter(status=Vehicle.Status.AVAILABLE))
+    drivers = list(Driver.objects.filter(status=Driver.Status.AVAILABLE))
 
     if request.method == 'POST':
         contract_type = request.POST.get('contract_type')
@@ -111,8 +112,8 @@ def agreement_create(request):
             messages.error(request, 'Please fill in all required fields.')
 
     context = {
-        'vehicles': vehicles if vehicles.exists() else Vehicle.objects.all()[:5],
-        'drivers': drivers if drivers.exists() else Driver.objects.all()[:5],
+        'vehicles': vehicles or list(Vehicle.objects.all()[:5]),
+        'drivers': drivers or list(Driver.objects.all()[:5]),
         'contract_types': Agreement.ContractType.choices,
         'current_dashboard': get_active_dashboard_role(request),
     }

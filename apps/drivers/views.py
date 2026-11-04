@@ -3,7 +3,7 @@ from apps.accounts.utils import log_activity
 from apps.accounts.models import ActivityLog
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
-from django.db.models import Q
+from django.db.models import Avg, Count, Q
 from .models import Driver, DriverHistory, DriverRating
 from apps.accounts.models import CustomUser
 
@@ -12,7 +12,7 @@ def driver_list(request):
     query = request.GET.get('q', '').strip()
     status_filter = request.GET.get('status', '').strip()
 
-    drivers = Driver.objects.all()
+    drivers = Driver.objects.annotate(average_rating_value=Avg('ratings__rating'))
     if query:
         drivers = drivers.filter(
             Q(first_name__icontains=query) |
@@ -25,19 +25,21 @@ def driver_list(request):
     if status_filter:
         drivers = drivers.filter(status=status_filter)
 
-    total_count = Driver.objects.count()
-    available_count = Driver.objects.filter(status=Driver.Status.AVAILABLE).count()
-    busy_count = Driver.objects.filter(status=Driver.Status.BUSY).count()
-    warning_count = Driver.objects.filter(status=Driver.Status.WARNING).count()
+    driver_counts = Driver.objects.aggregate(
+        total=Count('pk'),
+        available=Count('pk', filter=Q(status=Driver.Status.AVAILABLE)),
+        busy=Count('pk', filter=Q(status=Driver.Status.BUSY)),
+        warning=Count('pk', filter=Q(status=Driver.Status.WARNING)),
+    )
 
     context = {
         'drivers': drivers,
         'query': query,
         'status_filter': status_filter,
-        'total_count': total_count,
-        'available_count': available_count,
-        'busy_count': busy_count,
-        'warning_count': warning_count,
+        'total_count': driver_counts['total'],
+        'available_count': driver_counts['available'],
+        'busy_count': driver_counts['busy'],
+        'warning_count': driver_counts['warning'],
         'current_dashboard': get_active_dashboard_role(request),
     }
     return render(request, 'drivers/list.html', context)
@@ -100,7 +102,9 @@ def check_driver_view(request):
     history_entries = []
 
     if search_term:
-        matched_driver = Driver.objects.filter(
+        matched_driver = Driver.objects.annotate(
+            average_rating_value=Avg('ratings__rating')
+        ).filter(
             Q(passport_number__iexact=search_term) |
             Q(personal_id__iexact=search_term) |
             Q(license_number__iexact=search_term)
@@ -121,7 +125,10 @@ def check_driver_view(request):
 
 
 def driver_detail(request, pk):
-    driver = get_object_or_404(Driver, pk=pk)
+    driver = get_object_or_404(
+        Driver.objects.annotate(average_rating_value=Avg('ratings__rating')),
+        pk=pk,
+    )
     context = {
         'driver': driver,
         'history_entries': driver.history_entries.all(),

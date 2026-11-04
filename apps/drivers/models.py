@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import Avg
 from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
 
@@ -64,10 +65,11 @@ class Driver(models.Model):
 
     @property
     def average_rating(self):
-        ratings = self.ratings.all()
-        if ratings.exists():
-            return round(sum(r.rating for r in ratings) / ratings.count(), 1)
-        return 5.0
+        if 'average_rating_value' in self.__dict__:
+            average = self.average_rating_value
+        else:
+            average = self.ratings.aggregate(average=Avg('rating'))['average']
+        return round(average, 1) if average is not None else 5.0
 
     @property
     def total_agreements_count(self):

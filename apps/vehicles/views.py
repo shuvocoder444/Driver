@@ -3,7 +3,7 @@ from apps.accounts.utils import log_activity
 from apps.accounts.models import ActivityLog
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
-from django.db.models import Q
+from django.db.models import Count, Q
 from .models import Vehicle, VehicleImage, VehicleDocument
 from apps.accounts.models import CustomUser
 
@@ -27,20 +27,22 @@ def vehicle_list(request):
     if type_filter:
         vehicles = vehicles.filter(vehicle_type=type_filter)
 
-    total_count = Vehicle.objects.count()
-    available_count = Vehicle.objects.filter(status=Vehicle.Status.AVAILABLE).count()
-    rented_count = Vehicle.objects.filter(status=Vehicle.Status.RENTED).count()
-    maintenance_count = Vehicle.objects.filter(status=Vehicle.Status.MAINTENANCE).count()
+    vehicle_counts = Vehicle.objects.aggregate(
+        total=Count('pk'),
+        available=Count('pk', filter=Q(status=Vehicle.Status.AVAILABLE)),
+        rented=Count('pk', filter=Q(status=Vehicle.Status.RENTED)),
+        maintenance=Count('pk', filter=Q(status=Vehicle.Status.MAINTENANCE)),
+    )
 
     context = {
         'vehicles': vehicles,
         'query': query,
         'status_filter': status_filter,
         'type_filter': type_filter,
-        'total_count': total_count,
-        'available_count': available_count,
-        'rented_count': rented_count,
-        'maintenance_count': maintenance_count,
+        'total_count': vehicle_counts['total'],
+        'available_count': vehicle_counts['available'],
+        'rented_count': vehicle_counts['rented'],
+        'maintenance_count': vehicle_counts['maintenance'],
         'vehicle_types': Vehicle.VehicleType.choices,
         'status_choices': Vehicle.Status.choices,
         'current_dashboard': get_active_dashboard_role(request),

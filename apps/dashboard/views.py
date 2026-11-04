@@ -5,7 +5,7 @@ from apps.vehicles.models import Vehicle
 from apps.drivers.models import Driver, DriverHistory, DriverRating
 from apps.agreements.models import Agreement
 from apps.billing.models import Subscription, ManualPayment, Plan
-from django.db.models import Sum
+from django.db.models import Avg, Count, Q, Sum
 
 
 def dashboard_router(request):
@@ -57,33 +57,67 @@ def superadmin_dashboard(request):
     display_user = request.user
 
     # Subscriber Metrics
-    total_subscribers = CustomUser.objects.filter(role__in=[CustomUser.Role.INDIVIDUAL, CustomUser.Role.COMPANY]).count()
-    active_subscribers = Subscription.objects.filter(status=Subscription.Status.ACTIVE).values('user').distinct().count()
-    pending_approval = Subscription.objects.filter(status=Subscription.Status.PENDING).count() + ManualPayment.objects.filter(status=ManualPayment.Status.PENDING).count()
-    one_time_orders = Subscription.objects.filter(plan__interval=Plan.Interval.ONCE).count()
+    total_subscribers = CustomUser.objects.filter(
+        role__in=[CustomUser.Role.INDIVIDUAL, CustomUser.Role.COMPANY]
+    ).count()
+    subscription_counts = Subscription.objects.aggregate(
+        active_subscribers=Count(
+            'user',
+            distinct=True,
+            filter=Q(status=Subscription.Status.ACTIVE),
+        ),
+        pending=Count('pk', filter=Q(status=Subscription.Status.PENDING)),
+        one_time_orders=Count('pk', filter=Q(plan__interval=Plan.Interval.ONCE)),
+    )
+    payment_metrics = ManualPayment.objects.aggregate(
+        pending=Count('pk', filter=Q(status=ManualPayment.Status.PENDING)),
+        received=Sum('amount', filter=Q(status=ManualPayment.Status.APPROVED)),
+    )
+    pending_approval = subscription_counts['pending'] + payment_metrics['pending']
+    active_subscribers = subscription_counts['active_subscribers']
+    one_time_orders = subscription_counts['one_time_orders']
 
     # Platform Contracts & Revenue
-    total_contracts = Agreement.objects.count()
-    active_contracts = Agreement.objects.filter(status=Agreement.Status.ACTIVE).count()
-    payments_received = ManualPayment.objects.filter(status=ManualPayment.Status.APPROVED).aggregate(total=Sum('amount'))['total'] or 0.00
+    agreement_counts = Agreement.objects.aggregate(
+        total=Count('pk'),
+        active=Count('pk', filter=Q(status=Agreement.Status.ACTIVE)),
+    )
+    total_contracts = agreement_counts['total']
+    active_contracts = agreement_counts['active']
+    payments_received = payment_metrics['received'] or 0.00
 
     # Vehicles Fleet
-    vehicles_available = Vehicle.objects.filter(status=Vehicle.Status.AVAILABLE).count()
-    vehicles_rented = Vehicle.objects.filter(status=Vehicle.Status.RENTED).count()
-    vehicles_leased = Vehicle.objects.filter(status=Vehicle.Status.LEASED).count()
-    vehicles_maintenance = Vehicle.objects.filter(status=Vehicle.Status.MAINTENANCE).count()
-    total_vehicles = Vehicle.objects.count()
+    vehicle_counts = Vehicle.objects.aggregate(
+        total=Count('pk'),
+        available=Count('pk', filter=Q(status=Vehicle.Status.AVAILABLE)),
+        rented=Count('pk', filter=Q(status=Vehicle.Status.RENTED)),
+        leased=Count('pk', filter=Q(status=Vehicle.Status.LEASED)),
+        maintenance=Count('pk', filter=Q(status=Vehicle.Status.MAINTENANCE)),
+    )
+    vehicles_available = vehicle_counts['available']
+    vehicles_rented = vehicle_counts['rented']
+    vehicles_leased = vehicle_counts['leased']
+    vehicles_maintenance = vehicle_counts['maintenance']
+    total_vehicles = vehicle_counts['total']
 
     # Drivers
-    drivers_total = Driver.objects.count()
-    drivers_busy = Driver.objects.filter(status=Driver.Status.BUSY).count()
-    drivers_available = Driver.objects.filter(status=Driver.Status.AVAILABLE).count()
-    drivers_bad = Driver.objects.filter(status=Driver.Status.WARNING).count()
+    driver_counts = Driver.objects.aggregate(
+        total=Count('pk'),
+        busy=Count('pk', filter=Q(status=Driver.Status.BUSY)),
+        available=Count('pk', filter=Q(status=Driver.Status.AVAILABLE)),
+        warning=Count('pk', filter=Q(status=Driver.Status.WARNING)),
+    )
+    drivers_total = driver_counts['total']
+    drivers_busy = driver_counts['busy']
+    drivers_available = driver_counts['available']
+    drivers_bad = driver_counts['warning']
 
     # Recent lists
     recent_agreements = Agreement.objects.select_related('vehicle', 'driver').order_by('-created_at')[:5]
     recent_drivers = Driver.objects.order_by('-created_at')[:5]
-    pending_payments = ManualPayment.objects.filter(status=ManualPayment.Status.PENDING).order_by('-created_at')[:5]
+    pending_payments = ManualPayment.objects.filter(
+        status=ManualPayment.Status.PENDING
+    ).select_related('user', 'plan').order_by('-created_at')[:5]
 
     context = {
         'display_user': display_user,
@@ -136,25 +170,46 @@ def admin_dashboard(request):
     vehicles = Vehicle.objects.all()
     if display_user and not display_user.is_superadmin:
         my_vehicles = vehicles.filter(created_by=display_user)
-        if not my_vehicles.exists():
-            my_vehicles = vehicles
     else:
         my_vehicles = vehicles
 
-    total_fleet = my_vehicles.count()
-    fleet_available = my_vehicles.filter(status=Vehicle.Status.AVAILABLE).count()
-    fleet_rented = my_vehicles.filter(status=Vehicle.Status.RENTED).count()
-    fleet_maintenance = my_vehicles.filter(status=Vehicle.Status.MAINTENANCE).count()
+    fleet_counts = my_vehicles.aggregate(
+        total=Count('pk'),
+        available=Count('pk', filter=Q(status=Vehicle.Status.AVAILABLE)),
+        rented=Count('pk', filter=Q(status=Vehicle.Status.RENTED)),
+        maintenance=Count('pk', filter=Q(status=Vehicle.Status.MAINTENANCE)),
+    )
+    if not fleet_counts['total'] and not display_user.is_superadmin:
+        my_vehicles = vehicles
+        fleet_counts = my_vehicles.aggregate(
+            total=Count('pk'),
+            available=Count('pk', filter=Q(status=Vehicle.Status.AVAILABLE)),
+            rented=Count('pk', filter=Q(status=Vehicle.Status.RENTED)),
+            maintenance=Count('pk', filter=Q(status=Vehicle.Status.MAINTENANCE)),
+        )
+    total_fleet = fleet_counts['total']
+    fleet_available = fleet_counts['available']
+    fleet_rented = fleet_counts['rented']
+    fleet_maintenance = fleet_counts['maintenance']
 
     # My Agreements
     my_agreements = Agreement.objects.select_related('vehicle', 'driver').order_by('-created_at')
-    active_rentals = my_agreements.filter(status=Agreement.Status.ACTIVE).count()
-    completed_rentals = my_agreements.filter(status=Agreement.Status.COMPLETED).count()
+    agreement_counts = my_agreements.aggregate(
+        total=Count('pk'),
+        active=Count('pk', filter=Q(status=Agreement.Status.ACTIVE)),
+        completed=Count('pk', filter=Q(status=Agreement.Status.COMPLETED)),
+    )
+    active_rentals = agreement_counts['active']
+    completed_rentals = agreement_counts['completed']
 
     # Drivers under company
     my_drivers = Driver.objects.all()
-    drivers_count = my_drivers.count()
-    drivers_available = my_drivers.filter(status=Driver.Status.AVAILABLE).count()
+    driver_counts = my_drivers.aggregate(
+        total=Count('pk'),
+        available=Count('pk', filter=Q(status=Driver.Status.AVAILABLE)),
+    )
+    drivers_count = driver_counts['total']
+    drivers_available = driver_counts['available']
 
     # Subscription status
     my_subscription = Subscription.objects.filter(user=display_user, status=Subscription.Status.ACTIVE).first() if display_user else None
@@ -171,7 +226,7 @@ def admin_dashboard(request):
 
         'active_rentals': active_rentals,
         'completed_rentals': completed_rentals,
-        'total_contracts': my_agreements.count(),
+        'total_contracts': agreement_counts['total'],
 
         'drivers_count': drivers_count,
         'drivers_available': drivers_available,
@@ -195,13 +250,12 @@ def get_current_driver(request):
         request.session.modified = True
     display_user = request.user
 
-    driver = None
-    if display_user and hasattr(display_user, 'driver_profile'):
-        driver = display_user.driver_profile
+    drivers = Driver.objects.annotate(average_rating_value=Avg('ratings__rating'))
+    driver = drivers.filter(user=display_user).first()
     if not driver and display_user and display_user.email:
-        driver = Driver.objects.filter(email=display_user.email).first()
+        driver = drivers.filter(email=display_user.email).first()
     if not driver:
-        driver = Driver.objects.first()
+        driver = drivers.first()
 
     return display_user, driver
 
@@ -220,18 +274,27 @@ def driver_dashboard(request):
     history_entries = driver.history_entries.all() if driver else []
     ratings = driver.ratings.all() if driver else []
 
+    agreement_counts = agreements.aggregate(
+        total=Count('pk'),
+        active=Count('pk', filter=Q(status=Agreement.Status.ACTIVE)),
+        completed=Count('pk', filter=Q(status=Agreement.Status.COMPLETED)),
+        problem=Count('pk', filter=Q(status=Agreement.Status.PROBLEM)),
+    )
+    history_count = len(history_entries)
+    rating_count = len(ratings)
+
     context = {
         'display_user': display_user,
         'driver': driver,
         'current_dashboard': 'driver',
 
-        'total_agreements': agreements.count(),
-        'active_agreements': agreements.filter(status=Agreement.Status.ACTIVE).count(),
-        'completed_agreements': agreements.filter(status=Agreement.Status.COMPLETED).count(),
-        'problem_agreements': agreements.filter(status=Agreement.Status.PROBLEM).count(),
-        'total_issues': len(history_entries),
-        'completion_rate': 100 if agreements.count() == 0 else int((agreements.filter(status=Agreement.Status.COMPLETED).count() / agreements.count()) * 100),
-        'total_reviews': len(ratings),
+        'total_agreements': agreement_counts['total'],
+        'active_agreements': agreement_counts['active'],
+        'completed_agreements': agreement_counts['completed'],
+        'problem_agreements': agreement_counts['problem'],
+        'total_issues': history_count,
+        'completion_rate': 100 if agreement_counts['total'] == 0 else int((agreement_counts['completed'] / agreement_counts['total']) * 100),
+        'total_reviews': rating_count,
         'average_rating': driver.average_rating if driver else 4.8,
 
         'active_agreement': active_agreement,
@@ -283,15 +346,22 @@ def driver_agreements_view(request):
     else:
         filtered_agreements = agreements
 
+    agreement_counts = agreements.aggregate(
+        total=Count('pk'),
+        active=Count('pk', filter=Q(status=Agreement.Status.ACTIVE)),
+        completed=Count('pk', filter=Q(status=Agreement.Status.COMPLETED)),
+        problem=Count('pk', filter=Q(status=Agreement.Status.PROBLEM)),
+    )
+
     context = {
         'display_user': display_user,
         'driver': driver,
         'current_dashboard': 'driver',
         'agreements': filtered_agreements,
-        'total_count': agreements.count(),
-        'active_count': agreements.filter(status=Agreement.Status.ACTIVE).count(),
-        'completed_count': agreements.filter(status=Agreement.Status.COMPLETED).count(),
-        'problem_count': agreements.filter(status=Agreement.Status.PROBLEM).count(),
+        'total_count': agreement_counts['total'],
+        'active_count': agreement_counts['active'],
+        'completed_count': agreement_counts['completed'],
+        'problem_count': agreement_counts['problem'],
         'current_filter': status_filter,
     }
     return render(request, 'dashboard/driver_agreements.html', context)
